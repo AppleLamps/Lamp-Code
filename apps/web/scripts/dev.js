@@ -2,6 +2,22 @@
 
 const { spawn } = require('child_process');
 
+// Forward CLI args to Next.js and determine port
+const args = process.argv.slice(2);
+const portFromArgs = (() => {
+  const idxP = args.indexOf('-p');
+  if (idxP !== -1 && args[idxP + 1]) return args[idxP + 1];
+  const portFlag = args.find(a => a.startsWith('--port'));
+  if (portFlag) {
+    const eq = portFlag.indexOf('=');
+    if (eq !== -1) return portFlag.slice(eq + 1);
+    const nextIdx = args.indexOf(portFlag) + 1;
+    if (args[nextIdx]) return args[nextIdx];
+  }
+  return process.env.PORT || '3000';
+})();
+
+
 // Flag to ensure browser opens only once
 let browserOpened = false;
 
@@ -16,7 +32,7 @@ const openBrowserOnce = () => {
   // Wait for server to be ready, then open browser
   setTimeout(async () => {
     try {
-      const url = 'http://localhost:3000';
+      const url = `http://localhost:${portFromArgs}`;
       // Dynamic import for ESM module
       const open = (await import('open')).default;
       await open(url);
@@ -28,11 +44,14 @@ const openBrowserOnce = () => {
   }, 4000); // 4 second delay to ensure server is ready
 };
 
-// Start Next.js dev server
-const next = spawn('npx', ['next', 'dev', '--turbo'], {
+// Start Next.js dev server (forward args so port flags are honored)
+const next = spawn('npx', ['next', 'dev', '--turbo', ...args], {
   stdio: 'inherit',
   shell: true
 });
+
+// Log which URL we will open (based on port detection)
+console.log(`Dev server launching on http://localhost:${portFromArgs}`);
 
 // Open browser once after server starts
 openBrowserOnce();

@@ -485,7 +485,7 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
         else:
             preexec_fn = os.setsid
         process = subprocess.Popen(
-            [npm_path, "run", "dev", "--", "-p", str(port)],
+            [npm_path, "run", "dev", "--", "--port", str(port)],
             cwd=repo_path,
             env=env,
             stdout=subprocess.PIPE,
