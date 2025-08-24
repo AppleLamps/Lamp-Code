@@ -92,15 +92,6 @@ export default function HomePage() {
     const date = new Date(utcDateString);
     const now = new Date();
     
-    // Debug: Log the conversion (remove in production)
-    console.log('Time formatting:', {
-      input: dateString,
-      converted: utcDateString,
-      parsedISO: date.toISOString(),
-      parsedLocal: date.toLocaleString(),
-      nowISO: now.toISOString()
-    });
-    
     // Calculate the actual time difference
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
