@@ -170,15 +170,59 @@ async def _monitor_preview_errors(project_id: str, process: subprocess.Popen, ma
     while process.poll() is None:
         try:
             if process.stdout:
+                # Read a line from the child process without blocking the event loop
                 line = await asyncio.get_event_loop().run_in_executor(None, process.stdout.readline)
                 if line:
-                    line_text = line if isinstance(line, str) else line.decode('utf-8', errors='ignore')
+                    try:
+                        line_text = line if isinstance(line, str) else line.decode('utf-8', errors='strict')
+                    except UnicodeDecodeError as ude:
+                        # Log decode problems with limited preview of bytes
+                        preview = repr(line)[:120]
+                        logging.getLogger(__name__).warning(
+                            "Preview log decode error for %s (pid=%s): %s | data=%s",
+                            project_id,
+                            getattr(process, 'pid', 'n/a'),
+                            str(ude),
+                            preview,
+                        )
+                        # Fallback to ignore undecodable bytes
+                        line_text = line.decode('utf-8', errors='ignore') if not isinstance(line, str) else line
                     await collect_error_context(line_text)
 
             await asyncio.sleep(0.1)
-        except Exception as e:
-            logging.getLogger(__name__).exception("Preview monitoring error: %s", str(e))
+        except asyncio.CancelledError:
+            logging.getLogger(__name__).info(
+                "Preview monitoring cancelled for %s (pid=%s)",
+                project_id,
+                getattr(process, 'pid', 'n/a'),
+            )
             break
+        except (ValueError, OSError) as ioe:
+            # Common when the pipe/stream closes while we're reading
+            proc_state = "terminated" if process.poll() is not None else "running"
+            logging.getLogger(__name__).info(
+                "Preview monitoring stream issue for %s (pid=%s, state=%s): %s",
+                project_id,
+                getattr(process, 'pid', 'n/a'),
+                proc_state,
+                str(ioe),
+            )
+            if process.poll() is not None:
+                # Process ended; exit loop gracefully
+                break
+            # Transient read error; brief backoff and continue
+            await asyncio.sleep(0.2)
+            continue
+        except Exception as e:
+            # Unexpected error: log with context and continue instead of hard stop
+            logging.getLogger(__name__).exception(
+                "Unexpected error while monitoring preview logs for %s (pid=%s): %s",
+                project_id,
+                getattr(process, 'pid', 'n/a'),
+                str(e),
+            )
+            await asyncio.sleep(0.5)
+            continue
 
     # Send last error when process terminates
     if current_error and error_lines:
