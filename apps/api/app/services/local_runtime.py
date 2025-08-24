@@ -7,6 +7,7 @@ import hashlib
 import threading
 import re
 import sys
+import asyncio
 from contextlib import closing
 from typing import Optional, Dict
 from app.core.config import settings
@@ -17,18 +18,11 @@ _running_processes: Dict[str, subprocess.Popen] = {}
 _process_logs: Dict[str, list] = {}  # Store process logs for each project
 _process_ports: Dict[str, int] = {}  # Store port information for each project
 
-def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
-    """Simple Preview server error monitoring"""
-    from app.core.di_setup import get_cli_dependencies
-    import asyncio
-
-    # Get WebSocket manager through dependency injection
-    dependencies = get_cli_dependencies()
-    manager = dependencies.websocket_manager
-    
+async def _monitor_preview_errors(project_id: str, process: subprocess.Popen, manager):
+    """Async Preview server error monitoring"""
     error_patterns = [
         "Build Error",
-        "Failed to compile", 
+        "Failed to compile",
         "Syntax Error",
         "TypeError:",
         "ReferenceError:",
@@ -51,19 +45,19 @@ def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
         "Internal server error",
         "Application error"
     ]
-    
+
     success_patterns = [
         "✓ Ready in",
         "○ Compiling",
         "✓ Compiled",
         "✓ Starting"
     ]
-    
+
     recent_errors = {}     # Last send time per error ID
     error_contexts = {}    # Context collection per error
     current_error = None   # Currently processing error
     error_lines = []       # Error-related lines
-    
+
     def generate_error_id(error_line):
         """Generate unique ID from error line"""
         import hashlib
@@ -73,7 +67,7 @@ def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
         core_error = re.sub(r'\d{2}:\d{2}:\d{2}', '', core_error)  # Remove time
         core_error = re.sub(r'at .*?:\d+:\d+', '', core_error)     # Remove location info
         return hashlib.md5(core_error.encode()).hexdigest()[:8]
-    
+
     def should_send_error(error_id):
         """Determine whether to send error (prevent duplicates within 5 seconds)"""
         now = time.time()
@@ -82,9 +76,9 @@ def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
                 return False
         recent_errors[error_id] = now
         return True
-    
-    def collect_error_context(line_text):
-        """Collect error-related context"""
+
+    async def collect_error_context(line_text):
+        """Collect error-related context asynchronously"""
         nonlocal current_error, error_lines
 
         # Store logs per project (for full log collection)
@@ -104,7 +98,7 @@ def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
         # Store maximum 1000 lines only
         if len(_process_logs[project_id]) > 1000:
             _process_logs[project_id] = _process_logs[project_id][-1000:]
-        
+
         # Detect success patterns - clear error state
         for pattern in success_patterns:
             if pattern in line_text:
@@ -117,15 +111,8 @@ def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
                     }
                 }
 
-                print(f"[PreviewSuccess] Success message: {line_text.strip()}")
-
                 try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(
-                        manager.send_message(project_id, success_message)
-                    )
-                    print(f"[PreviewSuccess] WebSocket transmission successful!")
+                    await manager.send_message(project_id, success_message)
                 except Exception as e:
                     print(f"[PreviewSuccess] WebSocket transmission failed: {e}")
 
@@ -139,7 +126,7 @@ def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
             if pattern in line_text:
                 # Send previous error if exists
                 if current_error and error_lines:
-                    send_error_with_context(current_error, error_lines)
+                    await send_error_with_context(current_error, error_lines)
 
                 # Start new error
                 current_error = generate_error_id(line_text)
@@ -152,9 +139,9 @@ def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
             error_lines.append(line_text.strip())
             if len(error_lines) > 15:  # Runtime errors can have long stack traces, so up to 15 lines
                 error_lines = error_lines[-15:]
-    
-    def send_error_with_context(error_id, lines):
-        """Send error with context"""
+
+    async def send_error_with_context(error_id, lines):
+        """Send error with context asynchronously"""
         if not should_send_error(error_id):
             return
 
@@ -172,34 +159,28 @@ def _monitor_preview_errors(project_id: str, process: subprocess.Popen):
             }
         }
 
-        print(f"[PreviewError] Error to send (ID: {error_id}): {main_message[:100]}")
-
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(
-                manager.send_message(project_id, message_data)
-            )
-            print(f"[PreviewError] WebSocket transmission successful! (ID: {error_id})")
+            await manager.send_message(project_id, message_data)
         except Exception as e:
             print(f"[PreviewError] WebSocket transmission failed: {e}")
-    
+
+    # Async monitoring loop
     while process.poll() is None:
         try:
             if process.stdout:
-                line = process.stdout.readline()
+                line = await asyncio.get_event_loop().run_in_executor(None, process.stdout.readline)
                 if line:
                     line_text = line if isinstance(line, str) else line.decode('utf-8', errors='ignore')
-                    collect_error_context(line_text)
-            
-            time.sleep(0.1)
+                    await collect_error_context(line_text)
+
+            await asyncio.sleep(0.1)
         except Exception as e:
             print(f"[PreviewError] Monitoring error: {e}")
             break
 
     # Send last error when process terminates
     if current_error and error_lines:
-        send_error_with_context(current_error, error_lines)
+        await send_error_with_context(current_error, error_lines)
 
     print(f"[PreviewError] {project_id} monitoring terminated")
 
@@ -476,14 +457,29 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
             stdout, _ = process.communicate()
             raise RuntimeError(f"Next.js server failed to start: {stdout}")
         
-        # Start error monitoring thread
-        error_thread = threading.Thread(
-            target=_monitor_preview_errors,
-            args=(project_id, process),
-            daemon=True
-        )
-        error_thread.start()
-        print(f"[PreviewError] {project_id} error monitoring started")
+        # Start async error monitoring task
+        try:
+            from app.core.di_setup import get_cli_dependencies
+            dependencies = get_cli_dependencies()
+            manager = dependencies.websocket_manager
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_monitor_preview_errors(project_id, process, manager))
+                print(f"[PreviewError] {project_id} async error monitoring task scheduled on running loop")
+            except RuntimeError:
+                # No running loop in this thread; start a dedicated loop in a daemon thread
+                def _runner():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    new_loop.create_task(_monitor_preview_errors(project_id, process, manager))
+                    new_loop.run_forever()
+
+                t = threading.Thread(target=_runner, name=f"preview-monitor-{project_id}", daemon=True)
+                t.start()
+                print(f"[PreviewError] {project_id} async error monitoring loop started in background thread")
+        except Exception as e:
+            print(f"[PreviewError] Failed to start async monitoring: {e}")
         
         # Store process reference and port information
         _running_processes[project_id] = process

@@ -19,6 +19,7 @@ from app.db.base import Base
 import app.models  # noqa: F401 ensures models are imported for metadata
 from app.db.session import engine
 import os
+from app.core.validation import validate_environment_variables
 
 configure_logging()
 
@@ -78,6 +79,7 @@ def on_startup() -> None:
     ui.info("Initializing database tables")
     inspector = inspect(engine)
     Base.metadata.create_all(bind=engine)
+    validate_environment_variables()
     ui.success("Database initialization complete")
     
     # Show available endpoints
