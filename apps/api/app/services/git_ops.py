@@ -1,6 +1,8 @@
 import subprocess
 from typing import List, Optional
 import os
+import tempfile
+import sys
 
 
 def _run(cmd: list[str], cwd: str) -> str:
@@ -45,22 +47,23 @@ def hard_reset(repo_path: str, commit_sha: str) -> None:
     _run(["git", "reset", "--hard", commit_sha], cwd=repo_path)
 
 
+def _normalize_remote_url(url: str) -> str:
+    """Strip any embedded credentials from a GitHub HTTPS URL."""
+    import re
+    return re.sub(r'https://[^@]+@github.com/', 'https://github.com/', url)
+
+
 def add_remote(repo_path: str, remote_name: str, remote_url: str) -> None:
     """Add a remote repository"""
     try:
         # Check if remote already exists
         existing_url = _run(["git", "remote", "get-url", remote_name], cwd=repo_path)
-        
         # Compare URLs without authentication credentials for proper comparison
-        def normalize_url(url):
-            # Remove credentials from URL for comparison
-            import re
-            return re.sub(r'https://[^@]+@github.com/', 'https://github.com/', url)
-        
-        if normalize_url(existing_url) != normalize_url(remote_url):
+        if _normalize_remote_url(existing_url) != _normalize_remote_url(remote_url):
             # Different repository - remove existing remote and add new one
             _run(["git", "remote", "remove", remote_name], cwd=repo_path)
-            _run(["git", "remote", "add", remote_name, remote_url], cwd=repo_path)
+            # Always write normalized URL (no credentials) to config
+            _run(["git", "remote", "add", remote_name, _normalize_remote_url(remote_url)], cwd=repo_path)
             
             # Unset any existing upstream to avoid conflicts
             try:
@@ -69,35 +72,106 @@ def add_remote(repo_path: str, remote_name: str, remote_url: str) -> None:
                 pass  # No upstream set, that's fine
         else:
             # Same repository but potentially different credentials - update URL
-            _run(["git", "remote", "set-url", remote_name, remote_url], cwd=repo_path)
+            # Ensure credentials are not stored in config
+            _run(["git", "remote", "set-url", remote_name, _normalize_remote_url(remote_url)], cwd=repo_path)
     except subprocess.CalledProcessError:
         # Remote doesn't exist, add it
-        _run(["git", "remote", "add", remote_name, remote_url], cwd=repo_path)
+        # Always write normalized URL (no credentials)
+        _run(["git", "remote", "add", remote_name, _normalize_remote_url(remote_url)], cwd=repo_path)
 
-
-def push_to_remote(repo_path: str, remote_name: str = "origin", branch: str = "main") -> dict:
-    """Push to remote repository"""
+def _make_askpass_script(username: str, token: str) -> tuple[str, dict]:
+    """Create a temporary askpass script and env for secure HTTPS auth.
+    Returns (script_path, env_overrides).
+    """
+    # Git on HTTPS prompts first for username, then for password.
+    # We'll emit username on first call, token on second call.
+    # Use an env flag to toggle between the two on subsequent invocations.
+    is_windows = os.name == 'nt'
+    fd, path = tempfile.mkstemp(suffix='.cmd' if is_windows else '.sh')
+    os.close(fd)
+    if is_windows:
+        # cmd script; git will execute it with the prompt as %1
+        content = (
+            "@echo off\r\n"
+            "setlocal\r\n"
+            "set PROMPT=%1\r\n"
+            "echo %PROMPT% | findstr /I \"Username\" >nul\r\n"
+            "if %errorlevel%==0 (\r\n"
+            "  echo %GIT_ASKPASS_USERNAME%\r\n"
+            ") else (\r\n"
+            "  echo %GIT_ASKPASS_TOKEN%\r\n"
+            ")\r\n"
+        )
+    else:
+        content = (
+            "#!/usr/bin/env sh\n"
+            "case \"$1\" in\n"
+            "  *[Uu]sername*) printf '%s\\n' \"$GIT_ASKPASS_USERNAME\" ;;\n"
+            "  *) printf '%s\\n' \"$GIT_ASKPASS_TOKEN\" ;;\n"
+            "esac\n"
+        )
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(content)
     try:
-        # First try normal push with upstream
+        os.chmod(path, 0o700)
+    except Exception:
+        pass
+    env = {
+        'GIT_ASKPASS_USERNAME': username or 'x-access-token',
+        'GIT_ASKPASS_TOKEN': token,
+    }
+    return path, env
+
+
+def _run_git_with_askpass(args: list[str], cwd: str, username: str, token: str) -> str:
+    script, env_vars = _make_askpass_script(username, token)
+    try:
+        env = os.environ.copy()
+        env.update(env_vars)
+        env['GIT_ASKPASS'] = script
+        # Now run the git command; Git will invoke askpass as needed.
+        proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=env)
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
+        return proc.stdout.strip()
+    finally:
         try:
-            result = _run(["git", "push", "-u", remote_name, branch], cwd=repo_path)
+            os.remove(script)
+        except Exception:
+            pass
+
+
+def push_to_remote(repo_path: str, remote_name: str = "origin", branch: str = "main", *, token: Optional[str] = None, username: Optional[str] = None) -> dict:
+    """Push to remote repository.
+    If token provided, use GIT_ASKPASS for secure HTTPS auth (no tokens stored in config).
+    """
+    try:
+        def do_push(force: bool) -> str:
+            args = ["push", "-u"]
+            if force:
+                args.append("--force")
+            args += [remote_name, branch]
+            if token:
+                return _run_git_with_askpass(args, cwd=repo_path, username=(username or 'x-access-token'), token=token)
+            return _run(["git", *args], cwd=repo_path)
+
+        try:
+            result = do_push(force=False)
         except subprocess.CalledProcessError:
-            # If push fails (e.g., different histories), try force push
-            # This is safe for initial connection to a new empty repo
-            result = _run(["git", "push", "-u", "--force", remote_name, branch], cwd=repo_path)
-            
+            result = do_push(force=True)
+
         return {
             "success": True,
             "output": result,
             "remote": remote_name,
-            "branch": branch
+            "branch": branch,
         }
     except subprocess.CalledProcessError as e:
         return {
             "success": False,
             "error": e.stderr if e.stderr else str(e),
             "remote": remote_name,
-            "branch": branch
+            "branch": branch,
         }
 
 

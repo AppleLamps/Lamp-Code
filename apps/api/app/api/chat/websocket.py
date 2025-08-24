@@ -40,4 +40,4 @@ async def websocket_endpoint(websocket: WebSocket, project_id: str):
     except Exception as e:
         ui.error(f"Setup error for project {project_id}: {e}", "WebSocket")
     finally:
-        manager.disconnect(websocket, project_id)
+        await manager.disconnect(websocket, project_id)

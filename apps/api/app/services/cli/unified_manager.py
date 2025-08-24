@@ -961,7 +961,9 @@ class CursorAgentCLI(BaseCLI):
         
         # Check if AGENT.md already exists
         if os.path.exists(agent_md_path):
-            print(f"📝 [Cursor] AGENT.md already exists at: {agent_md_path}")
+            from app.core.terminal_ui import ui
+            from app.core.path_utils import mask_path
+            ui.info(f"[Cursor] AGENT.md already exists at: {mask_path(agent_md_path)}", "CLI")
             return
         
         try:
@@ -981,11 +983,16 @@ class CursorAgentCLI(BaseCLI):
                 with open(agent_md_path, 'w', encoding='utf-8') as f:
                     f.write(system_prompt_content)
                 
-                print(f"📝 [Cursor] Created AGENT.md at: {agent_md_path}")
+                from app.core.terminal_ui import ui
+                from app.core.path_utils import mask_path
+                ui.success(f"[Cursor] Created AGENT.md at: {mask_path(agent_md_path)}", "CLI")
             else:
-                print(f"⚠️ [Cursor] System prompt file not found at: {system_prompt_path}")
+                from app.core.terminal_ui import ui
+                from app.core.path_utils import mask_path
+                ui.warn(f"[Cursor] System prompt file not found at: {mask_path(system_prompt_path)}", "CLI")
         except Exception as e:
-            print(f"❌ [Cursor] Failed to create AGENT.md: {e}")
+            from app.core.terminal_ui import ui
+            ui.error(f"[Cursor] Failed to create AGENT.md: {e}", "CLI")
 
     async def execute_with_streaming(
         self,
@@ -1032,7 +1039,8 @@ class CursorAgentCLI(BaseCLI):
             # Validate session ID format
             validated_session_id = InputValidator.sanitize_cli_argument(active_session_id)
             cmd.extend(["--resume", validated_session_id])
-            print(f"🔗 [Cursor] Resuming session: {validated_session_id}")
+            from app.core.terminal_ui import ui
+            ui.info(f"[Cursor] Resuming session: {validated_session_id}", "CLI")
 
         # Add API key if available
         cursor_api_key = os.getenv("CURSOR_API_KEY")
@@ -1045,7 +1053,8 @@ class CursorAgentCLI(BaseCLI):
         if cli_model:
             validated_model = InputValidator.validate_model_name(cli_model)
             cmd.extend(["-m", validated_model])
-            print(f"🔧 [Cursor] Using model: {validated_model}")
+            from app.core.terminal_ui import ui
+            ui.info(f"[Cursor] Using model: {validated_model}", "CLI")
 
         # Validate the entire command
         cmd = InputValidator.validate_cli_command(cmd)
@@ -1092,12 +1101,14 @@ class CursorAgentCLI(BaseCLI):
                     
                     # Priority: Extract session ID from type: "result" event (most reliable)
                     if event_type == "result" and not cursor_session_id:
-                        print(f"🔍 [Cursor] Result event received: {event}")
+                        from app.core.terminal_ui import ui
+                        ui.info(f"[Cursor] Result event received", "CLI")
                         session_id_from_result = event.get("session_id")
                         if session_id_from_result:
                             cursor_session_id = session_id_from_result
                             await self.set_session_id(project_id, cursor_session_id)
-                            print(f"💾 [Cursor] Session ID extracted from result event: {cursor_session_id}")
+                            from app.core.terminal_ui import ui
+                            ui.info(f"[Cursor] Session ID extracted from result event", "CLI")
                         
                         # Mark that we received result event
                         result_received = True
@@ -1126,9 +1137,8 @@ class CursorAgentCLI(BaseCLI):
                         if potential_session_id and potential_session_id != active_session_id:
                             cursor_session_id = potential_session_id
                             await self.set_session_id(project_id, cursor_session_id)
-                            print(f"💾 [Cursor] Updated session ID for project {project_id}: {cursor_session_id}")
-                            print(f"   Previous: {active_session_id}")
-                            print(f"   New: {cursor_session_id}")
+                            from app.core.terminal_ui import ui
+                            ui.info(f"[Cursor] Updated session for project {project_id}", "CLI")
                     
                     # If we receive a non-assistant message, flush the buffer first
                     if event.get("type") != "assistant" and assistant_message_buffer:
@@ -1157,18 +1167,21 @@ class CursorAgentCLI(BaseCLI):
                     
                     # ★ CRITICAL: Break after result event to end streaming
                     if result_received:
-                        print(f"🏁 [Cursor] Result event received, terminating stream early")
+                        from app.core.terminal_ui import ui
+                        ui.info(f"[Cursor] Result event received, terminating stream", "CLI")
                         try:
                             process.terminate()
-                            print(f"🔪 [Cursor] Process terminated")
+                            from app.core.terminal_ui import ui
+                            ui.success(f"[Cursor] Process terminated", "CLI")
                         except Exception as e:
-                            print(f"⚠️ [Cursor] Failed to terminate process: {e}")
+                            from app.core.terminal_ui import ui
+                            ui.warn(f"[Cursor] Failed to terminate process: {e}", "CLI")
                         break
                     
                 except json.JSONDecodeError as e:
                     # Handle malformed JSON
-                    print(f"⚠️ [Cursor] JSON decode error: {e}")
-                    print(f"⚠️ [Cursor] Raw line: {line_str}")
+                    from app.core.terminal_ui import ui
+                    ui.warn(f"[Cursor] JSON decode error: {e}", "CLI")
                     
                     # Still yield as raw output
                     message = Message(
@@ -1200,7 +1213,8 @@ class CursorAgentCLI(BaseCLI):
             
             # Log completion
             if cursor_session_id:
-                print(f"✅ [Cursor] Session completed: {cursor_session_id}")
+                from app.core.terminal_ui import ui
+                ui.success(f"[Cursor] Session completed", "CLI")
             
         except FileNotFoundError:
             error_msg = "❌ Cursor Agent CLI not found. Please install with: curl https://cursor.com/install -fsS | bash"
@@ -1234,10 +1248,12 @@ class CursorAgentCLI(BaseCLI):
                 from app.models.projects import Project
                 project = self.db_session.query(Project).filter(Project.id == project_id).first()
                 if project and project.active_cursor_session_id:
-                    print(f"💾 [Cursor] Retrieved session ID from DB: {project.active_cursor_session_id}")
+                    from app.core.terminal_ui import ui
+                    ui.info(f"[Cursor] Retrieved session ID from DB", "CLI")
                     return project.active_cursor_session_id
             except Exception as e:
-                print(f"⚠️ [Cursor] Failed to get session ID from DB: {e}")
+                from app.core.terminal_ui import ui
+                ui.warn(f"[Cursor] Failed to get session ID from DB: {e}", "CLI")
         
         # Fallback to in-memory storage
         return self._session_store.get(project_id)
@@ -1252,20 +1268,25 @@ class CursorAgentCLI(BaseCLI):
                 if project:
                     project.active_cursor_session_id = session_id
                     self.db_session.commit()
-                    print(f"💾 [Cursor] Session ID saved to DB for project {project_id}: {session_id}")
+                    from app.core.terminal_ui import ui
+                    ui.success(f"[Cursor] Session ID saved to DB for project {project_id}", "CLI")
                     return
                 else:
-                    print(f"⚠️ [Cursor] Project {project_id} not found in DB")
+                    from app.core.terminal_ui import ui
+                    ui.warn(f"[Cursor] Project {project_id} not found in DB", "CLI")
             except Exception as e:
-                print(f"⚠️ [Cursor] Failed to save session ID to DB: {e}")
+                from app.core.terminal_ui import ui
+                ui.warn(f"[Cursor] Failed to save session ID to DB: {e}", "CLI")
                 import traceback
                 traceback.print_exc()
         else:
-            print(f"⚠️ [Cursor] No DB session available")
-        
+            from app.core.terminal_ui import ui
+            ui.warn(f"[Cursor] No DB session available", "CLI")
+
         # Fallback to in-memory storage
         self._session_store[project_id] = session_id
-        print(f"💾 [Cursor] Session ID stored in memory for project {project_id}: {session_id}")
+        from app.core.terminal_ui import ui
+        ui.info(f"[Cursor] Session ID stored in memory for project {project_id}", "CLI")
 
 
 

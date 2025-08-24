@@ -83,7 +83,8 @@ async def get_env_vars(project_id: str, db: Session = Depends(get_db)):
                     description=env_var.description
                 ))
             except Exception as e:
-                print(f"⚠️  Failed to decrypt env var {env_var.key}: {e}")
+                from app.core.terminal_ui import ui
+                ui.warn(f"Failed to decrypt env var {env_var.key}: {e}", "Env API")
                 continue
         
         return result

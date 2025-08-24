@@ -8,6 +8,8 @@ from app.api.deps import get_db
 from app.core.config import settings
 from app.models.projects import Project as ProjectModel
 from app.services.assets import write_bytes
+import logging
+from app.core.path_utils import mask_path
 
 router = APIRouter(prefix="/api/assets", tags=["assets"]) 
 
@@ -28,46 +30,54 @@ async def upload_logo(project_id: str, body: LogoRequest, db: Session = Depends(
     return {"path": f"assets/logo.png"}
 
 
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB limit
+
+
 @router.post("/{project_id}/upload")
 async def upload_image(project_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Upload an image file to project assets directory"""
-    print(f"📤 Image upload request: project_id={project_id}, filename={file.filename}")
+    logging.getLogger(__name__).info("Image upload: project_id=%s, filename=%s", project_id, file.filename)
     
     # Verify project exists
     row = db.get(ProjectModel, project_id)
     if not row:
-        print(f"❌ Project not found: {project_id}")
+        logging.getLogger(__name__).warning("Project not found: %s", project_id)
         raise HTTPException(status_code=404, detail="Project not found")
     
     # Check if file is an image
-    print(f"📁 File info: content_type={file.content_type}, size={file.size}")
+    logging.getLogger(__name__).debug("File info: content_type=%s, size=%s", file.content_type, getattr(file, 'size', 'unknown'))
     if not file.content_type or not file.content_type.startswith('image/'):
-        print(f"❌ Invalid file type: {file.content_type}")
+        logging.getLogger(__name__).warning("Invalid file type: %s", file.content_type)
         raise HTTPException(status_code=400, detail="File must be an image")
     
     # Create assets directory if it doesn't exist
     project_assets = os.path.join(settings.projects_root, project_id, "assets")
-    print(f"📁 Assets directory: {project_assets}")
+    logging.getLogger(__name__).debug("Assets directory: %s", mask_path(project_assets))
     os.makedirs(project_assets, exist_ok=True)
     
     # Generate unique filename to avoid conflicts
     file_extension = os.path.splitext(file.filename or 'image.png')[1]
     unique_filename = f"{uuid.uuid4()}{file_extension}"
     file_path = os.path.join(project_assets, unique_filename)
-    print(f"💾 Saving to: {file_path}")
+    logging.getLogger(__name__).info("Saving asset to: %s", mask_path(file_path))
     
     try:
         # Save file
         content = await file.read()
-        write_bytes(file_path, content)
-        print(f"✅ File saved successfully: {len(content)} bytes")
+        # Enforce size limits
+        if len(content) > MAX_IMAGE_BYTES:
+            logging.getLogger(__name__).warning("File too large: %s bytes", len(content))
+            raise HTTPException(status_code=413, detail="File too large")
         
+        write_bytes(file_path, content)
+        logging.getLogger(__name__).info("File saved successfully: %s bytes", len(content))
+
         return {
             "path": f"assets/{unique_filename}",
-            "absolute_path": file_path,
             "filename": unique_filename,
             "original_filename": file.filename
         }
     except Exception as e:
-        print(f"❌ Failed to save file: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+        # Do not leak absolute paths or internal details
+        logging.getLogger(__name__).exception("Failed to save file")
+        raise HTTPException(status_code=500, detail="Failed to save file")

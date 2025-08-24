@@ -19,6 +19,7 @@ from app.services.local_runtime import (
     get_preview_port,
     get_preview_process_id
 )
+from app.core.path_utils import mask_path
 
 
 router = APIRouter()
@@ -72,7 +73,8 @@ async def start_preview(
     if not project.repo_path:
         raise HTTPException(status_code=400, detail="Project repository not initialized yet. Please wait for initialization to complete.")
     if not os.path.exists(os.path.join(project.repo_path, "package.json")):
-        raise HTTPException(status_code=400, detail=f"Project repository at {project.repo_path} is missing package.json. Initialization may have failed.")
+        safe_repo = mask_path(project.repo_path)
+        raise HTTPException(status_code=400, detail=f"Project repository at {safe_repo} is missing package.json. Initialization may have failed.")
     
     # Start preview
     process_name, port = start_preview_process(project_id, project.repo_path, port=body.port)
@@ -99,21 +101,7 @@ async def start_preview(
     )
 
 
-@router.get("/{project_id}/error-logs")
-async def get_all_error_logs(
-    project_id: str,
-    db: Session = Depends(get_db)
-):
-    """Get all error logs from the preview process"""
-    
-    project = db.get(ProjectModel, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Get all stored logs for this project
-    all_logs = get_all_preview_logs(project_id)
-    
-    return {"logs": all_logs, "project_id": project_id}
+## Duplicate error-logs route removed to prevent FastAPI assertion / shadowing
 
 
 @router.post("/{project_id}/preview/stop")

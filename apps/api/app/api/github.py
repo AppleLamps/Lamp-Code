@@ -162,14 +162,9 @@ async def connect_github_repository(
             # Initialize main branch and ensure we have commits
             initialize_main_branch(repo_path)
             
-            # Create authenticated URL with DB token
-            authenticated_url = clone_url.replace(
-                "https://github.com/", 
-                f"https://{username}:{github_token}@github.com/"
-            )
-            
-            # Add remote origin with authentication
-            add_remote(repo_path, "origin", authenticated_url)
+            # IMPORTANT SECURITY: Do NOT embed tokens in remote URLs.
+            # Add remote using the plain HTTPS URL; credentials will be supplied at push time.
+            add_remote(repo_path, "origin", clone_url)
             
             # Commit any pending changes
             commit_result = commit_all(repo_path, "Initial commit - connected to GitHub")
@@ -333,8 +328,10 @@ async def push_github_repository(project_id: str, db: Session = Depends(get_db))
     # Commit any pending changes (optional harmless)
     commit_all(repo_path, "Publish from Lovable UI")
 
-    # Push
-    result = push_to_remote(repo_path, "origin", default_branch)
+    # Push (supply credentials securely at runtime; do not store in config)
+    github_token = get_token(db, "github")
+    username = connection.service_data.get("username") or "x-access-token"
+    result = push_to_remote(repo_path, "origin", default_branch, token=github_token, username=username)
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=f"Git push failed: {result.get('error', 'unknown')}")
 

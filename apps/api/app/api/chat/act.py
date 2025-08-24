@@ -107,11 +107,10 @@ async def execute_act_instruction(
 
 async def execute_chat_task(
     project_info: dict,
-    session: ChatSession,
+    session_id: str,
     instruction: str,
     conversation_id: str,
     images: List[ImageAttachment],
-    db: Session,
     cli_preference: CLIType = None,
     fallback_enabled: bool = True,
     is_initial_prompt: bool = False
@@ -135,15 +134,20 @@ async def execute_chat_task(
         
         ui.info(f"Using {cli_preference.value} with {project_selected_model or 'default model'}", "CHAT")
         
-        # Update session status to running
-        session.status = "running"
-        db.commit()
+        # Open fresh DB session for background work
+        from app.db.session import SessionLocal
+        db = SessionLocal()
+        # Load session row and mark as running
+        session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+        if session:
+            session.status = "running"
+            db.commit()
         
         # Send chat_start event to trigger loading indicator
         await manager.broadcast_to_project(project_id, {
             "type": "chat_start",
             "data": {
-                "session_id": session.id,
+                "session_id": session_id,
                 "instruction": instruction
             }
         })
@@ -152,7 +156,7 @@ async def execute_chat_task(
         cli_manager = UnifiedCLIManager(
             project_id=project_id,
             project_path=project_repo_path,
-            session_id=session.id,
+            session_id=session_id,
             conversation_id=conversation_id,
             db=db
         )
@@ -170,8 +174,9 @@ async def execute_chat_task(
         # Handle result
         if result and result.get("success"):
             # For chat mode, we don't commit changes - just update session status
-            session.status = "completed"
-            session.completed_at = datetime.utcnow()
+            if session:
+                session.status = "completed"
+                session.completed_at = datetime.utcnow()
             
         else:
             # Error message
@@ -186,14 +191,15 @@ async def execute_chat_task(
                     "cli_attempted": cli_preference.value
                 },
                 conversation_id=conversation_id,
-                session_id=session.id,
+                session_id=session_id,
                 created_at=datetime.utcnow()
             )
             db.add(error_msg)
             
-            session.status = "failed"
-            session.error = result.get("error") if result else "No CLI available"
-            session.completed_at = datetime.utcnow()
+            if session:
+                session.status = "failed"
+                session.error = result.get("error") if result else "No CLI available"
+                session.completed_at = datetime.utcnow()
             
             # Send error message via WebSocket
             error_data = {
@@ -203,7 +209,7 @@ async def execute_chat_task(
                 "content": error_msg.content,
                 "metadata": error_msg.metadata_json,
                 "parent_message_id": None,
-                "session_id": session.id,
+                "session_id": session_id,
                 "conversation_id": conversation_id
             }
             await manager.broadcast_to_project(project_id, {
@@ -218,8 +224,8 @@ async def execute_chat_task(
         await manager.broadcast_to_project(project_id, {
             "type": "chat_complete",
             "data": {
-                "status": session.status,
-                "session_id": session.id
+                "status": session.status if session else ("failed" if result and not result.get("success") else "completed"),
+                "session_id": session_id
             }
         })
         
@@ -227,30 +233,39 @@ async def execute_chat_task(
         ui.error(f"Chat execution error: {e}", "CHAT")
         
         # Save error
-        session.status = "failed"
-        session.error = str(e)
-        session.completed_at = datetime.utcnow()
-        
-        error_msg = Message(
-            id=str(uuid.uuid4()),
-            project_id=project_id,
-            role="assistant",
-            message_type="error",
-            content=f"Chat execution failed: {str(e)}",
-            metadata_json={"type": "chat_error"},
-            conversation_id=conversation_id,
-            session_id=session.id,
-            created_at=datetime.utcnow()
-        )
-        db.add(error_msg)
-        db.commit()
-        
+        try:
+            from app.db.session import SessionLocal
+            db = SessionLocal()
+            session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            if session:
+                session.status = "failed"
+                session.error = str(e)
+                session.completed_at = datetime.utcnow()
+            
+            error_msg = Message(
+                id=str(uuid.uuid4()),
+                project_id=project_id,
+                role="assistant",
+                message_type="error",
+                content=f"Chat execution failed: {str(e)}",
+                metadata_json={"type": "chat_error"},
+                conversation_id=conversation_id,
+                session_id=session_id,
+                created_at=datetime.utcnow()
+            )
+            db.add(error_msg)
+            db.commit()
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
         # Send chat_complete event even on failure to clear loading indicator
         await manager.broadcast_to_project(project_id, {
             "type": "chat_complete",
             "data": {
                 "status": "failed",
-                "session_id": session.id,
+                "session_id": session_id,
                 "error": str(e)
             }
         })
@@ -258,11 +273,10 @@ async def execute_chat_task(
 
 async def execute_act_task(
     project_info: dict,
-    session: ChatSession,
+    session_id: str,
     instruction: str,
     conversation_id: str,
     images: List[ImageAttachment],
-    db: Session,
     cli_preference: CLIType = None,
     fallback_enabled: bool = True,
     is_initial_prompt: bool = False,
@@ -287,10 +301,15 @@ async def execute_act_task(
         
         ui.info(f"Using {cli_preference.value} with {project_selected_model or 'default model'}", "ACT")
         
-        # Update session status to running
-        session.status = "running"
+        # Open fresh DB session
+        from app.db.session import SessionLocal
+        db = SessionLocal()
+        # Load session row and mark as running
+        session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+        if session:
+            session.status = "running"
         
-        # ★ NEW: Update UserRequest status to started
+        # Update UserRequest status to started
         if request_id:
             user_request = db.query(UserRequest).filter(UserRequest.id == request_id).first()
             if user_request:
@@ -304,7 +323,7 @@ async def execute_act_task(
         await manager.broadcast_to_project(project_id, {
             "type": "act_start",
             "data": {
-                "session_id": session.id,
+                "session_id": session_id,
                 "instruction": instruction,
                 "request_id": request_id
             }
@@ -314,7 +333,7 @@ async def execute_act_task(
         cli_manager = create_cli_manager(
             project_id=project_id,
             project_path=project_repo_path,
-            session_id=session.id,
+            session_id=session_id,
             conversation_id=conversation_id,
             db_session=db
         )
@@ -363,8 +382,9 @@ async def execute_act_task(
                     ui.warning(f"Commit failed: {e}", "ACT")
             
             # Update session status only (no success message to user)
-            session.status = "completed"
-            session.completed_at = datetime.utcnow()
+            if session:
+                session.status = "completed"
+                session.completed_at = datetime.utcnow()
             
             # ★ NEW: Mark UserRequest as completed successfully
             if request_id:
@@ -395,14 +415,15 @@ async def execute_act_task(
                     "cli_attempted": cli_preference.value
                 },
                 conversation_id=conversation_id,
-                session_id=session.id,
+                session_id=session_id,
                 created_at=datetime.utcnow()
             )
             db.add(error_msg)
             
-            session.status = "failed"
-            session.error = result.get("error") if result else "No CLI available"
-            session.completed_at = datetime.utcnow()
+            if session:
+                session.status = "failed"
+                session.error = result.get("error") if result else "No CLI available"
+                session.completed_at = datetime.utcnow()
             
             # ★ NEW: Mark UserRequest as completed with failure
             if request_id:
@@ -424,7 +445,7 @@ async def execute_act_task(
                 "content": error_msg.content,
                 "metadata": error_msg.metadata_json,
                 "parent_message_id": None,
-                "session_id": session.id,
+                "session_id": session_id,
                 "conversation_id": conversation_id
             }
             await manager.broadcast_to_project(project_id, {
@@ -445,11 +466,14 @@ async def execute_act_task(
         await manager.broadcast_to_project(project_id, {
             "type": "act_complete",
             "data": {
-                "status": session.status,
-                "session_id": session.id,
+                "status": session.status if session else ("failed" if result and not result.get("success") else "completed"),
+                "session_id": session_id,
                 "request_id": request_id
             }
         })
+        
+        # Close DB session for background task
+        db.close()
         
     except Exception as e:
         ui.error(f"Execution error: {e}", "ACT")
@@ -457,39 +481,49 @@ async def execute_act_task(
         ui.error(f"Traceback: {traceback.format_exc()}", "ACT")
         
         # Save error
-        session.status = "failed"
-        session.error = str(e)
-        session.completed_at = datetime.utcnow()
-        
-        # ★ NEW: Mark UserRequest as failed due to exception
-        if request_id:
-            user_request = db.query(UserRequest).filter(UserRequest.id == request_id).first()
-            if user_request:
-                user_request.is_completed = True
-                user_request.is_successful = False
-                user_request.completed_at = datetime.utcnow()
-                user_request.error_message = str(e)
-        
-        error_msg = Message(
-            id=str(uuid.uuid4()),
-            project_id=project_id,
-            role="assistant",
-            message_type="error",
-            content=f"Execution failed: {str(e)}",
-            metadata_json={"type": "act_error"},
-            conversation_id=conversation_id,
-            session_id=session.id,
-            created_at=datetime.utcnow()
-        )
-        db.add(error_msg)
-        db.commit()
+        from app.db.session import SessionLocal
+        db = SessionLocal()
+        try:
+            session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            if session:
+                session.status = "failed"
+                session.error = str(e)
+                session.completed_at = datetime.utcnow()
+
+            # Mark UserRequest as failed due to exception
+            if request_id:
+                user_request = db.query(UserRequest).filter(UserRequest.id == request_id).first()
+                if user_request:
+                    user_request.is_completed = True
+                    user_request.is_successful = False
+                    user_request.completed_at = datetime.utcnow()
+                    user_request.error_message = str(e)
+
+            error_msg = Message(
+                id=str(uuid.uuid4()),
+                project_id=project_id,
+                role="assistant",
+                message_type="error",
+                content=f"Execution failed: {str(e)}",
+                metadata_json={"type": "act_error"},
+                conversation_id=conversation_id,
+                session_id=session_id,
+                created_at=datetime.utcnow()
+            )
+            db.add(error_msg)
+            db.commit()
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
         
         # Send act_complete event even on failure to clear loading indicator
         await manager.broadcast_to_project(project_id, {
             "type": "act_complete",
             "data": {
                 "status": "failed",
-                "session_id": session.id,
+                "session_id": session_id,
                 "request_id": request_id,
                 "error": str(e)
             }
@@ -608,15 +642,14 @@ async def run_act(
         'selected_model': project.selected_model
     }
     
-    # Add background task
+    # Add background task (use fresh DB in task, pass IDs only)
     background_tasks.add_task(
         execute_act_task,
         project_info,
-        session,
+        session.id,
         body.instruction,
         conversation_id,
         body.images,
-        db,
         cli_preference,
         fallback_enabled,
         body.is_initial_prompt,
@@ -727,15 +760,14 @@ async def run_chat(
         'selected_model': project.selected_model
     }
     
-    # Add background task for chat (same as act but with different event type)
+    # Add background task for chat (use fresh DB in task, pass IDs only)
     background_tasks.add_task(
         execute_chat_task,
         project_info,
-        session,
+        session.id,
         body.instruction,
         conversation_id,
         body.images,
-        db,
         cli_preference,
         fallback_enabled,
         body.is_initial_prompt

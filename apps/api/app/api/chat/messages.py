@@ -14,6 +14,7 @@ from app.models.projects import Project
 from app.models.messages import Message
 from app.models.user_requests import UserRequest
 from app.core.di_setup import get_cli_dependencies
+from app.core.websocket.manager import manager
 
 
 router = APIRouter()

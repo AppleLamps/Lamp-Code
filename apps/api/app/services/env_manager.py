@@ -49,7 +49,8 @@ def parse_env_file(env_path: Path) -> Dict[str, str]:
                     env_vars[key] = value
                 
     except Exception as e:
-        print(f"Error parsing .env file {env_path}: {e}")
+        from app.core.terminal_ui import ui
+        ui.error(f"Error parsing .env file {env_path}: {e}", "EnvManager")
     
     return env_vars
 
@@ -79,6 +80,7 @@ def write_env_file(env_path: Path, env_vars: Dict[str, str]) -> None:
         ui.success(f"Updated .env file: {env_path}", "EnvManager")
         
     except Exception as e:
+        from app.core.terminal_ui import ui
         ui.error(f"Error writing .env file {env_path}: {e}", "EnvManager")
         raise
 
@@ -98,7 +100,8 @@ def load_env_vars_from_db(db: Session, project_id: str) -> Dict[str, str]:
                 decrypted_value = secret_box.decrypt(env_var.value_encrypted)
                 env_vars[env_var.key] = decrypted_value
             except Exception as e:
-                print(f"⚠️  Failed to decrypt env var {env_var.key}: {e}")
+                from app.core.terminal_ui import ui
+                ui.warn(f"Failed to decrypt env var {env_var.key}: {e}", "EnvManager")
                 
     except Exception as e:
         from app.core.terminal_ui import ui
@@ -136,7 +139,8 @@ def sync_env_file_to_db(db: Session, project_id: str) -> int:
                         existing_var.value_encrypted = secret_box.encrypt(value)
                         synced_count += 1
                 except Exception as e:
-                    print(f"⚠️  Failed to decrypt existing value for {key}: {e}")
+                    from app.core.terminal_ui import ui
+                    ui.warn(f"Failed to decrypt existing value for {key}: {e}", "EnvManager")
                     existing_var.value_encrypted = secret_box.encrypt(value)
                     synced_count += 1
             else:
@@ -166,6 +170,7 @@ def sync_env_file_to_db(db: Session, project_id: str) -> int:
         ui.success(f"Synced {synced_count} env vars from file to DB", "EnvManager")
         
     except Exception as e:
+        from app.core.terminal_ui import ui
         ui.error(f"Error syncing env file to DB: {e}", "EnvManager")
         db.rollback()
         raise
@@ -181,16 +186,17 @@ def sync_db_to_env_file(db: Session, project_id: str) -> int:
     try:
         # Load from database
         env_vars = load_env_vars_from_db(db, project_id)
-        
+
         # Write to file
         env_path = get_project_env_path(project_id)
         write_env_file(env_path, env_vars)
-        
-        print(f"✅ Synced {len(env_vars)} env vars from DB to file")
+        from app.core.terminal_ui import ui
+        ui.success(f"Synced {len(env_vars)} env vars from DB to file", "EnvManager")
         return len(env_vars)
-        
+
     except Exception as e:
-        print(f"❌ Error syncing DB to env file: {e}")
+        from app.core.terminal_ui import ui
+        ui.error(f"Error syncing DB to env file: {e}", "EnvManager")
         raise
 
 
@@ -226,7 +232,8 @@ def get_env_var_conflicts(db: Session, project_id: str) -> List[Dict]:
                 })
     
     except Exception as e:
-        print(f"❌ Error checking env var conflicts: {e}")
+        from app.core.terminal_ui import ui
+        ui.error(f"Error checking env var conflicts: {e}", "EnvManager")
     
     return conflicts
 

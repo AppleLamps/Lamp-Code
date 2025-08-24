@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional
 
 from app.core.config import settings
+import logging
+from app.core.path_utils import mask_path
 from app.services.filesystem import (
     ensure_dir,
     scaffold_nextjs_minimal,
@@ -140,7 +142,7 @@ async def initialize_project_with_ai(project_id: str, name: str, initial_prompt:
             if os.path.exists(project_path):
                 shutil.rmtree(os.path.dirname(project_path))  # Remove entire project directory
         except Exception as cleanup_error:
-            print(f"Failed to cleanup project directory: {cleanup_error}")
+            logging.getLogger(__name__).warning("Failed to cleanup project directory: %s", str(cleanup_error))
 
         # Re-raise with user-friendly message
         raise Exception(f"Failed to initialize project: {str(e)}")
@@ -168,7 +170,7 @@ async def cleanup_project(project_id: str) -> bool:
         return False
     
     except Exception as e:
-        print(f"Error cleaning up project {project_id}: {e}")
+        logging.getLogger(__name__).warning("Error cleaning up project %s: %s", project_id, str(e))
         return False
 
 
@@ -258,9 +260,10 @@ async def parse_and_update_project_metadata(project_id: str, db_session) -> dict
     try:
         with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
-        
+
         # Update project in database
         from app.models.projects import Project as ProjectModel
+        from app.core.terminal_ui import ui
         project = db_session.query(ProjectModel).filter(ProjectModel.id == project_id).first()
         
         if project:
@@ -283,6 +286,7 @@ async def parse_and_update_project_metadata(project_id: str, db_session) -> dict
         return metadata
         
     except Exception as e:
+        from app.core.terminal_ui import ui
         ui.error(f"Failed to parse metadata for project {project_id}: {e}", "Project")
         raise
 

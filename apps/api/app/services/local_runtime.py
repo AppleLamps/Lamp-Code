@@ -11,6 +11,8 @@ import asyncio
 from contextlib import closing
 from typing import Optional, Dict
 from app.core.config import settings
+import logging
+from app.core.path_utils import mask_path
 
 
 # Global process registry to track running Next.js processes
@@ -114,7 +116,7 @@ async def _monitor_preview_errors(project_id: str, process: subprocess.Popen, ma
                 try:
                     await manager.send_message(project_id, success_message)
                 except Exception as e:
-                    print(f"[PreviewSuccess] WebSocket transmission failed: {e}")
+                    logging.getLogger(__name__).warning("PreviewSuccess send failed: %s", str(e))
 
                 # Clear current error state
                 current_error = None
@@ -162,7 +164,7 @@ async def _monitor_preview_errors(project_id: str, process: subprocess.Popen, ma
         try:
             await manager.send_message(project_id, message_data)
         except Exception as e:
-            print(f"[PreviewError] WebSocket transmission failed: {e}")
+            logging.getLogger(__name__).warning("PreviewError send failed: %s", str(e))
 
     # Async monitoring loop
     while process.poll() is None:
@@ -175,14 +177,14 @@ async def _monitor_preview_errors(project_id: str, process: subprocess.Popen, ma
 
             await asyncio.sleep(0.1)
         except Exception as e:
-            print(f"[PreviewError] Monitoring error: {e}")
+            logging.getLogger(__name__).exception("Preview monitoring error: %s", str(e))
             break
 
     # Send last error when process terminates
     if current_error and error_lines:
         await send_error_with_context(current_error, error_lines)
 
-    print(f"[PreviewError] {project_id} monitoring terminated")
+    logging.getLogger(__name__).info("Preview monitoring terminated for %s", project_id)
 
 
 def _is_port_free(port: int) -> bool:
@@ -214,7 +216,7 @@ def _should_install_dependencies(repo_path: str) -> bool:
     
     # If node_modules doesn't exist, definitely need to install
     if not os.path.exists(node_modules_path):
-        print(f"node_modules not found, will install dependencies")
+        logging.getLogger(__name__).info("node_modules not found; will install dependencies")
         return True
     
     # Calculate current hash of package files
@@ -238,10 +240,10 @@ def _should_install_dependencies(repo_path: str) -> bool:
         with open(install_hash_path, 'r') as f:
             stored_hash = f.read().strip()
             if stored_hash == final_hash:
-                print(f"Dependencies are up to date (hash: {final_hash[:8]}...)")
+                logging.getLogger(__name__).info("Dependencies up to date (hash: %s)", final_hash[:8])
                 return False
     
-    print(f"Package files changed, will install dependencies (new hash: {final_hash[:8]}...)")
+    logging.getLogger(__name__).info("Package files changed; will install dependencies (new hash: %s)", final_hash[:8])
     return True
 
 
@@ -296,11 +298,11 @@ def _acquire_install_lock(repo_path: str) -> bool:
                 age = time.time() - mtime
                 STALE_SECONDS = 600  # 10 minutes
                 if age > STALE_SECONDS:
-                    print(f"Install lock stale (age {int(age)}s). Removing stale lock at {lock_path} and attempting to acquire lock.")
+                    logging.getLogger(__name__).warning("Install lock stale (age %ss). Removing stale lock at %s and attempting to acquire lock.", int(age), mask_path(lock_path))
                     try:
                         os.remove(lock_path)
                     except Exception as e:
-                        print(f"Failed to remove stale lock at {lock_path}: {e}")
+                        logging.getLogger(__name__).warning("Failed to remove stale lock at %s: %s", mask_path(lock_path), str(e))
                         return False
                     # Try to acquire lock again after removing stale file
                     try:
@@ -309,19 +311,19 @@ def _acquire_install_lock(repo_path: str) -> bool:
                             f.write(f"{os.getpid()} {int(time.time())}\n")
                         return True
                     except Exception as e:
-                        print(f"Failed to acquire lock after removing stale lock: {e}")
+                        logging.getLogger(__name__).warning("Failed to acquire lock after removing stale lock: %s", str(e))
                         return False
                 else:
-                    print(f"Install lock present at {lock_path}, another install may be in progress (age {int(age)}s)")
+                    logging.getLogger(__name__).info("Install lock present at %s; another install may be in progress (age %ss)", mask_path(lock_path), int(age))
                     return False
             else:
                 # Lock disappeared between check; try again
                 return _acquire_install_lock(repo_path)
         except Exception as e:
-            print(f"Error checking install lock at {lock_path}: {e}")
+            logging.getLogger(__name__).warning("Error checking install lock at %s: %s", mask_path(lock_path), str(e))
             return False
     except Exception as e:
-        print(f"Failed to create install lock at {lock_path}: {e}")
+        logging.getLogger(__name__).warning("Failed to create install lock at %s: %s", mask_path(lock_path), str(e))
         return False
 
 
@@ -332,7 +334,7 @@ def _release_install_lock(repo_path: str) -> None:
         if os.path.exists(lock_path):
             os.remove(lock_path)
     except Exception as e:
-        print(f"Failed to remove install lock at {lock_path}: {e}")
+        logging.getLogger(__name__).warning("Failed to remove install lock at %s: %s", mask_path(lock_path), str(e))
 
 
 def start_preview_process(project_id: str, repo_path: str, port: Optional[int] = None) -> tuple[str, int]:
@@ -353,7 +355,7 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
     # Clear previous logs for this project
     if project_id in _process_logs:
         _process_logs[project_id] = []
-        print(f"[PreviewError] Cleared previous logs for {project_id}")
+        logging.getLogger(__name__).info("Cleared previous logs for %s", project_id)
     
     # Assign port
     port = port or find_free_preview_port()
@@ -363,12 +365,12 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
     if not repo_path or not isinstance(repo_path, str):
         raise RuntimeError("Project repository path is not set. Please initialize the project first.")
     if not os.path.isdir(repo_path):
-        raise RuntimeError(f"Repository path does not exist: {repo_path}")
+        raise RuntimeError(f"Repository path does not exist: {mask_path(repo_path)}")
     
     # Check if project has package.json
     package_json_path = os.path.join(repo_path, "package.json")
     if not os.path.exists(package_json_path):
-        raise RuntimeError(f"No package.json found in {repo_path}")
+        raise RuntimeError(f"No package.json found in {mask_path(repo_path)}")
     
     # Install dependencies and start dev server
     env = os.environ.copy()
@@ -406,7 +408,7 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
             # Prevent duplicate installs (e.g., background + preview)
             if _acquire_install_lock(repo_path):
                 try:
-                    print(f"Installing dependencies for project {project_id}...")
+                    logging.getLogger(__name__).info("Installing dependencies for project %s...", project_id)
                     install_result = subprocess.run(
                         [npm_path, "install"],
                         cwd=repo_path,
@@ -421,16 +423,16 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
                     
                     # Save hash after successful install
                     _save_install_hash(repo_path)
-                    print(f"Dependencies installed successfully for project {project_id}")
+                    logging.getLogger(__name__).info("Dependencies installed successfully for project %s", project_id)
                 finally:
                     _release_install_lock(repo_path)
             else:
-                print(f"Another install in progress for project {project_id}, skipping npm install")
+                logging.getLogger(__name__).info("Another install in progress for project %s; skipping npm install", project_id)
         else:
-            print(f"Dependencies already up to date for project {project_id}, skipping npm install")
-        
+            logging.getLogger(__name__).info("Dependencies already up to date for project %s; skipping npm install", project_id)
+
         # Start development server
-        print(f"Starting Next.js dev server for project {project_id} on port {port}...")
+        logging.getLogger(__name__).info("Starting Next.js dev server for project %s on port %s...", project_id, port)
         # Cross-platform process group handling
         creationflags = 0
         preexec_fn = None
@@ -448,15 +450,15 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
             preexec_fn=preexec_fn,
             creationflags=creationflags
         )
-        
+
         # Wait a moment for the server to start
         time.sleep(2)
-        
+
         # Check if process is still running
         if process.poll() is not None:
             stdout, _ = process.communicate()
             raise RuntimeError(f"Next.js server failed to start: {stdout}")
-        
+
         # Start async error monitoring task
         try:
             from app.core.di_setup import get_cli_dependencies
@@ -466,7 +468,7 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(_monitor_preview_errors(project_id, process, manager))
-                print(f"[PreviewError] {project_id} async error monitoring task scheduled on running loop")
+                logging.getLogger(__name__).info("%s async error monitoring task scheduled on running loop", project_id)
             except RuntimeError:
                 # No running loop in this thread; start a dedicated loop in a daemon thread
                 def _runner():
@@ -475,17 +477,17 @@ def start_preview_process(project_id: str, repo_path: str, port: Optional[int] =
                     new_loop.create_task(_monitor_preview_errors(project_id, process, manager))
                     new_loop.run_forever()
 
-                t = threading.Thread(target=_runner, name=f"preview-monitor-{project_id}", daemon=True)
+                t = threading.Thread(target=_runner, name=f"preview-monitor-%s" % project_id, daemon=True)
                 t.start()
-                print(f"[PreviewError] {project_id} async error monitoring loop started in background thread")
+                logging.getLogger(__name__).info("%s async error monitoring loop started in background thread", project_id)
         except Exception as e:
-            print(f"[PreviewError] Failed to start async monitoring: {e}")
-        
+            logging.getLogger(__name__).warning("Failed to start async monitoring: %s", str(e))
+
         # Store process reference and port information
         _running_processes[project_id] = process
         _process_ports[project_id] = port
 
-        print(f"Next.js dev server started for {project_id} on port {port} (PID: {process.pid})")
+        logging.getLogger(__name__).info("Next.js dev server started for %s on port %s (PID: %s)", project_id, port, process.pid)
         return process_name, port
         
     except subprocess.TimeoutExpired:
@@ -526,7 +528,7 @@ def stop_preview_process(project_id: str, cleanup_cache: bool = False) -> None:
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                 process.wait()
                 
-            print(f"Stopped Next.js dev server for project {project_id} (PID: {process.pid})")
+            logging.getLogger(__name__).info("Stopped Next.js dev server for project %s (PID: %s)", project_id, process.pid)
             
         except (OSError, ProcessLookupError):
             # Process already terminated
@@ -540,7 +542,7 @@ def stop_preview_process(project_id: str, cleanup_cache: bool = False) -> None:
             # Clear logs when process stops
             if project_id in _process_logs:
                 del _process_logs[project_id]
-                print(f"[PreviewStop] Cleared logs for {project_id}")
+                logging.getLogger(__name__).info("Cleared logs for %s", project_id)
     
     # Optionally cleanup npm cache
     if cleanup_cache:
@@ -553,9 +555,9 @@ def stop_preview_process(project_id: str, cleanup_cache: bool = False) -> None:
                     capture_output=True,
                     timeout=30
                 )
-                print(f"Cleaned npm cache for project {project_id}")
+                logging.getLogger(__name__).info("Cleaned npm cache for project %s", project_id)
         except Exception as e:
-            print(f"Failed to clean npm cache for {project_id}: {e}")
+            logging.getLogger(__name__).warning("Failed to clean npm cache for %s: %s", project_id, str(e))
 
 
 def cleanup_project_resources(project_id: str) -> None:

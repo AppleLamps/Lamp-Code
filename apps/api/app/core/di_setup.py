@@ -14,7 +14,7 @@ def setup_dependencies():
     container.register("websocket_manager", websocket_manager)
     container.register("logger", ui)
     
-    print("✅ Dependency injection container initialized")
+    ui.success("Dependency injection container initialized", "DI Setup")
 
 
 def get_cli_dependencies() -> CLIDependencies:

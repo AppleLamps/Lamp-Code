@@ -14,6 +14,7 @@ from app.api.github import router as github_router
 from app.api.vercel import router as vercel_router
 from app.core.logging import configure_logging
 from app.core.terminal_ui import ui
+from app.core.config import settings
 from sqlalchemy import inspect
 from app.db.base import Base
 import app.models  # noqa: F401 ensures models are imported for metadata
@@ -47,7 +48,7 @@ app.add_middleware(LogFilterMiddleware)
 # Basic CORS for local development - support multiple ports
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins in development
+    allow_origins=settings.cors_allow_origins or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]

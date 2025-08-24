@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from uuid import uuid4
 import logging
 
-from app.db.session import get_db
+from app.api.deps import get_db
 from app.models.projects import Project
 from app.models.project_services import ProjectServiceConnection
 from pydantic import BaseModel

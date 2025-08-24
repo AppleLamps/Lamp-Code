@@ -113,17 +113,17 @@ Current project structure:
 
 Please build upon this foundation to create: {initial_prompt}"""
 
-        # Execute with Claude
-        cli_type = CLIType.CLAUDE if project.preferred_cli == "claude" else CLIType.CURSOR
+            # Execute with Claude
+            cli_type = CLIType.CLAUDE if project.preferred_cli == "claude" else CLIType.CURSOR
 
-        result = await cli_manager.execute_instruction(
-            instruction=enhanced_prompt,
-            cli_type=cli_type,
-            fallback_enabled=project.fallback_enabled or True,
-            images=[],
-            model=project.selected_model,
-            is_initial_prompt=True
-        )
+            result = await cli_manager.execute_instruction(
+                instruction=enhanced_prompt,
+                cli_type=cli_type,
+                fallback_enabled=project.fallback_enabled or True,
+                images=[],
+                model=project.selected_model,
+                is_initial_prompt=True
+            )
 
             if result and result.get("success"):
                 ui.success(f"Successfully generated project structure for {project_id}", "AI Generation")
@@ -198,7 +198,8 @@ async def initialize_project_background(project_id: str, project_name: str, body
                             project.repo_path = expected_path
                             db_session.commit()
 
-                        print(f"⚠️ Project {project_id} partially initialized (path set despite errors): {e}")
+                        from app.core.terminal_ui import ui
+                        ui.warn(f"Project {project_id} partially initialized (path set despite errors): {e}", "Projects")
                         return expected_path
                     else:
                         # Project directory doesn't exist, re-raise the exception
@@ -244,7 +245,8 @@ async def initialize_project_background(project_id: str, project_name: str, body
                 }
             })
             
-            print(f"✅ Project {project_id} initialized successfully")
+            from app.core.terminal_ui import ui
+            ui.success(f"Project {project_id} initialized successfully", "Projects")
             
         finally:
             db_session.close()
@@ -269,8 +271,9 @@ async def initialize_project_background(project_id: str, project_name: str, body
                 "message": f"Failed to initialize project: {str(e)}"
             }
         })
-        
-        print(f"❌ Failed to initialize project {project_id}: {e}")
+        from app.core.terminal_ui import ui
+        ui.error(f"Failed to initialize project {project_id}: {e}", "Projects")
+        return
 
 
 async def install_dependencies_background(project_id: str, project_path: str):
@@ -283,7 +286,8 @@ async def install_dependencies_background(project_id: str, project_path: str):
         # Check if package.json exists
         package_json_path = os.path.join(project_path, "package.json")
         if os.path.exists(package_json_path):
-            print(f"Installing dependencies for project {project_id}...")
+            from app.core.terminal_ui import ui
+            ui.info(f"Installing dependencies for project {project_id}...", "Projects")
 
             # Enhanced environment setup for better npm detection (same as filesystem.py)
             env = os.environ.copy()
@@ -306,13 +310,15 @@ async def install_dependencies_background(project_id: str, project_path: str):
             # Find npm executable with enhanced environment
             npm_path = shutil.which("npm", path=env.get("PATH"))
             if not npm_path:
-                print(f"npm not found for project {project_id} dependency installation")
+                from app.core.terminal_ui import ui
+                ui.warn(f"npm not found for project {project_id} dependency installation", "Projects")
                 return
 
             # Run npm install in background with enhanced environment
             from app.services.local_runtime import _acquire_install_lock, _release_install_lock, _save_install_hash
             if not _acquire_install_lock(project_path):
-                print(f"Another install in progress for project {project_id}, skipping background install")
+                from app.core.terminal_ui import ui
+                ui.info(f"Another install in progress for project {project_id}, skipping background install", "Projects")
                 return
             try:
                 process = await asyncio.create_subprocess_exec(
@@ -325,18 +331,22 @@ async def install_dependencies_background(project_id: str, project_path: str):
                 stdout, stderr = await process.communicate()
 
                 if process.returncode == 0:
-                    print(f"Dependencies installed successfully for project {project_id}")
+                    from app.core.terminal_ui import ui
+                    ui.success(f"Dependencies installed successfully for project {project_id}", "Projects")
                     # Save hash so preview path can detect up-to-date deps
                     try:
                         _save_install_hash(project_path)
                     except Exception as e:
-                        print(f"Warning: failed to save install hash for project {project_id}: {e}")
+                        from app.core.terminal_ui import ui
+                        ui.warn(f"Failed to save install hash for project {project_id}: {e}", "Projects")
                 else:
-                    print(f"Failed to install dependencies for project {project_id}: {stderr.decode()}")
+                    from app.core.terminal_ui import ui
+                    ui.error(f"Failed to install dependencies for project {project_id}: {stderr.decode()}", "Projects")
             finally:
                 _release_install_lock(project_path)
     except Exception as e:
-        print(f"Error installing dependencies: {e}")
+        from app.core.terminal_ui import ui
+        ui.error(f"Error installing dependencies: {e}", "Projects")
 
 @router.post("/{project_id}/install-dependencies")
 async def install_project_dependencies(
@@ -478,8 +488,10 @@ async def create_project(
 ) -> Project:
     """Create a new project"""
     
-    print(f"🔧 [CreateProject] Received request: {body}")
-    print(f"🔧 [CreateProject] CLI: {body.preferred_cli}, Model: {body.selected_model}")
+    from app.core.terminal_ui import ui
+    ui.info(f"[CreateProject] Received request", "Projects")
+    from app.core.terminal_ui import ui
+    ui.info(f"[CreateProject] CLI: {body.preferred_cli}, Model: {body.selected_model}", "Projects")
     
     # Check if project already exists
     existing = db.query(ProjectModel).filter(ProjectModel.id == body.project_id).first()
@@ -497,7 +509,8 @@ async def create_project(
             selected_model = "sonnet-4"  # Use unified model name
     fallback_enabled = body.fallback_enabled if body.fallback_enabled is not None else True
     
-    print(f"🔧 [CreateProject] Creating project {body.project_id} with CLI: {preferred_cli}, Model: {selected_model}, Fallback: {fallback_enabled}")
+    from app.core.terminal_ui import ui
+    ui.info(f"[CreateProject] Creating project {body.project_id} with CLI: {preferred_cli}, Model: {selected_model}, Fallback: {fallback_enabled}", "Projects")
     
     project = ProjectModel(
         id=body.project_id,
@@ -639,11 +652,14 @@ async def delete_project(project_id: str, db: Session = Depends(get_db)):
         from app.services.project.initializer import cleanup_project
         cleanup_success = await cleanup_project(project_id)
         if cleanup_success:
-            print(f"✅ Project files deleted successfully for {project_id}")
+            from app.core.terminal_ui import ui
+            ui.success(f"Project files deleted successfully for {project_id}", "Projects")
         else:
-            print(f"⚠️ Project files may not have been fully deleted for {project_id}")
+            from app.core.terminal_ui import ui
+            ui.warn(f"Project files may not have been fully deleted for {project_id}", "Projects")
     except Exception as e:
-        print(f"❌ Error cleaning up project files for {project_id}: {e}")
+        from app.core.terminal_ui import ui
+        ui.error(f"Error cleaning up project files for {project_id}: {e}", "Projects")
         # Don't fail the whole operation if file cleanup fails
     
     return {"message": f"Project {project_id} deleted successfully"}

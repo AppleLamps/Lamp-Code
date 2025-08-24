@@ -305,7 +305,7 @@ async def deploy_to_vercel(
 
         # 백그라운드 배포 모니터링 시작
         try:
-            from app.api.deps import SessionLocal
+            from app.db.session import SessionLocal
             logger.info(f"🚀 Starting background monitoring for deployment {deployment_result['deployment_id']}")
             await start_deployment_monitoring(
                 project_id=project_id,

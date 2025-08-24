@@ -1,11 +1,3 @@
-from sqlalchemy.orm import Session
-from app.db.session import SessionLocal
+# Re-export the canonical dependency from app.db.session to avoid duplication
+from app.db.session import get_db  # noqa: F401
 
-
-def get_db():
-    """Database session dependency"""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()

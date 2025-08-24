@@ -19,7 +19,11 @@ class SecretBox:
             else:
                 # Dev fallback: generate ephemeral key (warn user)
                 key = base64.urlsafe_b64encode(os.urandom(32)).decode()
-                print("Warning: Using ephemeral encryption key in development. Encrypted data will not persist across restarts.")
+                try:
+                    from app.core.terminal_ui import ui
+                    ui.warn("Using ephemeral encryption key in development. Encrypted data will not persist across restarts.", "Crypto")
+                except Exception:
+                    pass
 
         try:
             self._fernet = Fernet(key)

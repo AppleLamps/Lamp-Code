@@ -50,6 +50,10 @@ class Settings(BaseModel):
     # Encryption key validation
     encryption_key: str = os.getenv("ENCRYPTION_KEY", "")
 
+    # CORS origins (comma-separated or JSON array); "*" to allow all
+    _cors_env: str = os.getenv("CORS_ALLOWED_ORIGINS", "*")
+    cors_allow_origins: list[str] = []
+
     def validate_encryption_key(self) -> None:
         """Validate encryption key is provided in production"""
         environment = os.getenv("ENVIRONMENT", "development")
@@ -67,8 +71,24 @@ try:
     settings.validate_encryption_key()
 except ValueError as e:
     import sys
-    print(f"Configuration Error: {e}")
+    from app.core.terminal_ui import ui
+    ui.error(f"Configuration Error: {e}", "Config")
     if os.getenv("ENVIRONMENT") == "production":
         sys.exit(1)
     else:
-        print("Warning: Running in development mode without explicit encryption key")
+        ui.warn("Running in development mode without explicit encryption key", "Config")
+
+# Initialize CORS origins after settings object creation
+raw = settings._cors_env.strip()
+if raw == "*":
+    settings.cors_allow_origins = ["*"]
+else:
+    import json
+    try:
+        if raw.startswith("["):
+            settings.cors_allow_origins = json.loads(raw)
+        else:
+            settings.cors_allow_origins = [o.strip() for o in raw.split(",") if o.strip()]
+    except Exception:
+        # Fallback to single origin string
+        settings.cors_allow_origins = [raw]
